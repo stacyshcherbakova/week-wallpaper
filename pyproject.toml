@@ -1,0 +1,9 @@
+[project]
+name = "week-wallpaper"
+version = "0.1.0"
+description = "Plan your week and render it as a macOS wallpaper"
+requires-python = ">=3.10"
+dependencies = [
+    "streamlit>=1.30",
+    "pillow>=10.0",
+]
