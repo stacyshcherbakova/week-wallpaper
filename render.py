@@ -27,6 +27,7 @@ HERE = Path(__file__).parent
 FONTS = "/System/Library/Fonts"
 SUPP = "/System/Library/Fonts/Supplemental"
 DIN_PATH = f"{SUPP}/DIN Condensed Bold.ttf"
+ROUNDED_PATH = f"{SUPP}/Arial Rounded Bold.ttf"
 MENLO_PATH = f"{FONTS}/Menlo.ttc"
 SF_PATH = f"{FONTS}/SFNS.ttf"
 HELV_PATH = f"{FONTS}/HelveticaNeue.ttc"
@@ -97,13 +98,26 @@ class Theme:
 
     scanline_alpha: int = 9       # 0 disables the CRT scanlines
     vignette: float = 0.34        # edge darkening strength
+    gradient: bool = True         # vertical ink_hi -> ink wash; False = flat ink
+    bloom: float = 1.0            # glow strength behind header/today; 0 = off
+
+    # display face for the masthead + day names: "din" | "rounded"
+    display: str = "din"
+
+    # card mode — when card_fills is non-empty each day column sits on its own
+    # rounded card (fills cycle Mon..Sun, all equal height). Today's card gets
+    # a card_today outline. Gutter hairlines / today-wash are skipped.
+    card_fills: tuple[str, ...] = ()
+    card_today: str = "#2B2822"   # outline colour marking today's card
+    card_pad: int = 16            # how far the card extends past the column
+    card_inset: int = 26          # interior padding: content shifts in this much
 
     # layout — one column per day, nothing is ever truncated
     margin_x: int = 120
     margin_top: int = 310         # 14" panel is 100 px/cm, so this is ~3.1 cm
     margin_bottom: int = 110
     header_h: int = 230
-    col_gap: int = 26             # gutter between day columns
+    col_gap: int = 52             # gutter between day columns (hairline mid-gap)
     right_margin: int = 0         # clear band on the right (for desktop icons)
     day_head_h: int = 152         # day name + date block atop each column
     sec_gap: int = 30             # meetings -> tasks divider spacing
@@ -125,8 +139,9 @@ class Theme:
 
     _SCALED = ("width", "height", "margin_x", "margin_top", "margin_bottom",
                "header_h", "col_gap", "right_margin", "day_head_h", "sec_gap",
-               "time_w", "line_h", "fs_eyebrow", "fs_title", "fs_meta",
-               "fs_collabel", "fs_day", "fs_date", "fs_time", "fs_body")
+               "time_w", "line_h", "card_pad", "card_inset", "fs_eyebrow",
+               "fs_title", "fs_meta", "fs_collabel", "fs_day", "fs_date",
+               "fs_time", "fs_body")
 
     def __post_init__(self):
         if self.scale != 1:
@@ -140,6 +155,44 @@ class Theme:
     def lw(self, n: float) -> int:
         """Line width in output pixels (never thinner than 1)."""
         return max(1, round(n * self.scale))
+
+
+# --------------------------------------------------------------------------- #
+# Design presets — kwargs for Theme(); the app picks one by name.
+# --------------------------------------------------------------------------- #
+THEMES: dict[str, dict] = {
+    # the original violet-CRT status board
+    "Phosphor": {},
+
+    # black & white, no texture — OLED-friendly minimal poster
+    "Mono": dict(
+        ink="#000000", ink_hi="#000000", gradient=False, bloom=0.0,
+        scanline_alpha=0, vignette=0.0,
+        accent="#FFFFFF", accent_dim="#A6A6A6", parch="#F2F2F2",
+        stone="#8C8C8C", stone_dim="#4A4A4A", line="#242424",
+    ),
+
+    # warm off-white, near-black type, one red accent — Swiss poster
+    "Paper": dict(
+        ink="#F4F1EA", ink_hi="#F4F1EA", gradient=False, bloom=0.0,
+        scanline_alpha=0, vignette=0.0,
+        accent="#C63D2F", accent_dim="#B8756A", parch="#1C1A16",
+        stone="#6E6A60", stone_dim="#B4AD9E", line="#DCD5C5",
+    ),
+
+    # syntato.garden-inspired: cream page, rounded chunky type, one pastel
+    # sticker-card per day, today in yellow
+    "Garden": dict(
+        ink="#F6F4EF", ink_hi="#F6F4EF", gradient=False, bloom=0.0,
+        scanline_alpha=0, vignette=0.0, display="rounded",
+        accent="#2B2822", accent_dim="#6B665C", parch="#2B2822",
+        stone="#6B665C", stone_dim="#A8A296", line="#57524A",
+        card_fills=("#F2C4E1", "#B5E3C4", "#EAD79E", "#D8CDF2",
+                    "#F6CBAD", "#BFDDF4", "#E4DECE"),
+        card_today="#2B2822", card_pad=16,
+        col_gap=58, fs_title=112, fs_day=52,
+    ),
+}
 
 
 DAY_ABBR = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
@@ -156,6 +209,13 @@ _SF_FALLBACK = {"Regular": 0, "Bold": 1, "Medium": 4, "Semibold": 4}
 @lru_cache(maxsize=None)
 def din(size: int) -> ImageFont.FreeTypeFont:
     return ImageFont.truetype(DIN_PATH, size)
+
+
+@lru_cache(maxsize=None)
+def display(kind: str, size: int) -> ImageFont.FreeTypeFont:
+    if kind == "rounded":
+        return ImageFont.truetype(ROUNDED_PATH, size)
+    return din(size)
 
 
 @lru_cache(maxsize=None)
@@ -221,6 +281,9 @@ def wrap(draw, text, fnt, max_w) -> list[str]:
             cut = len(ln)
             while cut > 1 and draw.textlength(ln[:cut], font=fnt) > max_w:
                 cut -= 1
+            hy = ln.rfind("-", 1, cut)      # break after a hyphen if there is one
+            if hy > 0:
+                cut = hy + 1
             out.append(ln[:cut])
             ln = ln[cut:]
         out.append(ln)
@@ -235,8 +298,12 @@ def _geometry(th: Theme):
     grid_bottom = th.height - th.margin_bottom
     grid_right = th.width - th.margin_x - th.right_margin
     col_w = (grid_right - th.margin_x - 6 * th.col_gap) / 7
+    # in card mode the content is inset from the card edges; text_x / text_w
+    # describe the region text actually occupies within a column
+    text_x = th.card_inset if th.card_fills else 0
     return dict(grid_top=grid_top, grid_bottom=grid_bottom,
                 grid_right=grid_right, col_w=col_w,
+                text_x=text_x, text_w=col_w - 2 * text_x,
                 body_top=grid_top + th.day_head_h,
                 body_h=grid_bottom - (grid_top + th.day_head_h))
 
@@ -250,21 +317,26 @@ def col_x(th: Theme, geo, i: int) -> float:
 # --------------------------------------------------------------------------- #
 def make_background(th: Theme, bloom_ys) -> Image.Image:
     ink, hi = hex_rgb(th.ink), hex_rgb(th.ink_hi)
-    # subtle vertical warmth (top a touch warmer/lighter)
-    strip = Image.new("RGB", (1, th.height))
-    sp = strip.load()
-    for y in range(th.height):
-        sp[0, y] = lerp(hi, ink, min(1.0, (y / th.height) * 1.4))
-    base = strip.resize((th.width, th.height)).convert("RGB")
+    if th.gradient:
+        # subtle vertical warmth (top a touch warmer/lighter)
+        strip = Image.new("RGB", (1, th.height))
+        sp = strip.load()
+        for y in range(th.height):
+            sp[0, y] = lerp(hi, ink, min(1.0, (y / th.height) * 1.4))
+        base = strip.resize((th.width, th.height)).convert("RGB")
+    else:
+        base = Image.new("RGB", (th.width, th.height), ink)
 
-    # amber bloom behind header + today lane
-    bloom = Image.new("L", (th.width, th.height), 0)
-    bd = ImageDraw.Draw(bloom)
-    for (bx, by, br, strength) in bloom_ys:
-        bd.ellipse([bx - br, by - br, bx + br, by + br], fill=int(255 * strength))
-    bloom = bloom.filter(ImageFilter.GaussianBlur(th.width * 0.10))
-    accent_layer = Image.new("RGB", (th.width, th.height), hex_rgb(th.accent))
-    base = Image.composite(accent_layer, base, bloom.point(lambda v: int(v * 0.16)))
+    # accent bloom behind header + today lane
+    if th.bloom > 0 and bloom_ys:
+        bloom = Image.new("L", (th.width, th.height), 0)
+        bd = ImageDraw.Draw(bloom)
+        for (bx, by, br, strength) in bloom_ys:
+            bd.ellipse([bx - br, by - br, bx + br, by + br], fill=int(255 * strength))
+        bloom = bloom.filter(ImageFilter.GaussianBlur(th.width * 0.10))
+        accent_layer = Image.new("RGB", (th.width, th.height), hex_rgb(th.accent))
+        base = Image.composite(accent_layer, base,
+                               bloom.point(lambda v: int(v * 0.16 * th.bloom)))
 
     # vignette
     if th.vignette > 0:
@@ -320,7 +392,7 @@ def fit_scale(draw, week: Week, th: Theme, geo) -> float:
     s = th.max_scale
     while s > th.min_scale:
         m = _metrics(th, s)
-        if all(_day_blocks(draw, d, m, geo["col_w"])[2] <= geo["body_h"]
+        if all(_day_blocks(draw, d, m, geo["text_w"])[2] <= geo["body_h"]
                for d in week.days):
             return s
         s -= 0.04
@@ -330,16 +402,18 @@ def fit_scale(draw, week: Week, th: Theme, geo) -> float:
 def draw_column(draw, th, geo, i: int, day: Day, m: dict, is_today, is_weekend):
     C = {k: hex_rgb(getattr(th, k)) for k in
          ("accent", "accent_dim", "parch", "stone", "stone_dim", "line")}
-    x = col_x(th, geo, i)
-    col_w = geo["col_w"]
+    x = col_x(th, geo, i) + geo["text_x"]
+    col_w = geo["text_w"]
     body = sf(m["fs_body"])
     tick = mono(m["fs_time"])
     lh, tw = m["line_h"], m["time_w"]
 
     # --- day head ---
     day_col = C["accent"] if is_today else (C["stone"] if is_weekend else C["parch"])
+    if th.card_fills:                    # cards carry the today/weekend signal
+        day_col = C["parch"]
     draw.text((x, geo["grid_top"]), DAY_ABBR[day.date.weekday()],
-              font=din(th.fs_day), fill=day_col, anchor="la")
+              font=display(th.display, th.fs_day), fill=day_col, anchor="la")
     draw.text((x + th.px(3), geo["grid_top"] + th.fs_day + th.px(14)),
               f"{MONTHS[day.date.month - 1]} {day.date.day:02d}",
               font=mono(th.fs_date),
@@ -383,7 +457,8 @@ def draw_column(draw, th, geo, i: int, day: Day, m: dict, is_today, is_weekend):
 
     if meets and tasks:
         y += m["sec_gap"] / 2
-        draw.line([(x, y), (x + col_w * 0.5, y)], fill=C["line"], width=th.lw(1))
+        end = x + col_w if th.card_fills else x + col_w * 0.5
+        draw.line([(x, y), (end, y)], fill=C["line"], width=th.lw(1))
         y += m["sec_gap"] / 2
 
     # --- tasks ---
@@ -420,7 +495,7 @@ def render_week(week: Week, theme: Theme | None = None, today: dt.date | None = 
     # scale and the column chrome can both follow the actual content.
     probe = ImageDraw.Draw(Image.new("RGB", (1, 1)))
     m = _metrics(th, fit_scale(probe, week, th, geo))
-    content_h = max(_day_blocks(probe, d, m, geo["col_w"])[2] for d in week.days)
+    content_h = max(_day_blocks(probe, d, m, geo["text_w"])[2] for d in week.days)
     chrome_bottom = min(geo["grid_bottom"], geo["body_top"] + content_h + th.px(44))
 
     # bloom sources: header, and today's column if in view
@@ -434,16 +509,30 @@ def render_week(week: Week, theme: Theme | None = None, today: dt.date | None = 
     img = make_background(th, blooms)
 
     # faint wash down today's column so the eye lands there first
-    if today_idx is not None:
+    if today_idx is not None and not th.card_fills:
         over = Image.new("RGBA", (th.width, th.height), (0, 0, 0, 0))
         tx = col_x(th, geo, today_idx)
+        # the wash fills today's whole lane, stopping just shy of the hairlines
         ImageDraw.Draw(over).rounded_rectangle(
-            [tx - th.px(18), geo["grid_top"] - th.px(34),
-             tx + geo["col_w"] + th.px(18), chrome_bottom],
+            [tx - th.col_gap / 2 + th.px(3), geo["grid_top"] - th.px(34),
+             tx + geo["col_w"] + th.col_gap / 2 - th.px(3), chrome_bottom],
             radius=th.px(20), fill=hex_rgb(th.accent) + (15,))
         img = Image.alpha_composite(img.convert("RGBA"), over).convert("RGB")
 
     draw = ImageDraw.Draw(img)
+
+    # card mode — one rounded pastel card per day, all equal height (sized to
+    # the busiest day); today wears a frame instead of a louder fill
+    if th.card_fills:
+        for i, day in enumerate(week.days):
+            x = col_x(th, geo, i)
+            fill = th.card_fills[i % len(th.card_fills)]
+            draw.rounded_rectangle(
+                [x - th.card_pad, geo["grid_top"] - th.px(34),
+                 x + geo["col_w"] + th.card_pad, chrome_bottom],
+                radius=th.px(26), fill=hex_rgb(fill),
+                outline=hex_rgb(th.card_today) if i == today_idx else None,
+                width=th.lw(5))
     C = {k: hex_rgb(getattr(th, k)) for k in ("accent", "accent_dim", "parch", "stone", "stone_dim", "line")}
 
     # --- header ---
@@ -453,19 +542,20 @@ def render_week(week: Week, theme: Theme | None = None, today: dt.date | None = 
     draw_ls(draw, (th.margin_x, th.margin_top), f"WEEK {wk:02d}  ·  {week.start.year}",
             mono(th.fs_eyebrow), C["accent_dim"], ls=th.px(7), anchor="ls")
     draw.text((th.margin_x - th.px(3), th.margin_top + th.px(150)), _range_label(week.start),
-              font=din(th.fs_title), fill=C["parch"], anchor="ls")
+              font=display(th.display, th.fs_title), fill=C["parch"], anchor="ls")
     draw_ls(draw, (geo["grid_right"], th.margin_top + th.px(150)),
             f"{n_meet} MEETINGS   {n_todo} TASKS", mono(th.fs_meta), C["stone"],
             anchor="rs")
 
-    # divider under header
-    dy = geo["grid_top"] - th.px(62)
-    draw.line([(th.margin_x, dy), (geo["grid_right"], dy)],
-              fill=C["line"], width=th.lw(2))
+    # divider under header (cards structure the page on their own)
+    if not th.card_fills:
+        dy = geo["grid_top"] - th.px(62)
+        draw.line([(th.margin_x, dy), (geo["grid_right"], dy)],
+                  fill=C["line"], width=th.lw(2))
 
     # --- columns ---
     for i, day in enumerate(week.days):
-        if i > 0:                                # gutter hairline
+        if i > 0 and not th.card_fills:          # gutter hairline
             gx = col_x(th, geo, i) - th.col_gap / 2
             draw.line([(gx, geo["grid_top"] - th.px(34)), (gx, chrome_bottom)],
                       fill=C["line"], width=th.lw(1))

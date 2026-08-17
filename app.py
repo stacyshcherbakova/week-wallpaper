@@ -14,7 +14,7 @@ import streamlit as st
 import calendar_sync
 import store
 import wallpaper
-from render import Theme, Week, render_week
+from render import THEMES, Theme, Week, render_week
 
 HERE = Path(__file__).parent
 OUT = HERE / "out"
@@ -33,13 +33,22 @@ st.set_page_config(page_title="Weekly Wallpaper", page_icon="🗓️", layout="w
 # --------------------------------------------------------------------------- #
 st.title("🗓️ Weekly Wallpaper")
 
-c_date, c_sync, c_cal, c_help = st.columns([2, 1, 1, 1])
+c_date, c_theme, c_sync, c_cal, c_help = st.columns([2, 1, 1, 1, 1])
 with c_date:
     picked = st.date_input("Week of", value=monday_of(dt.date.today()))
 monday = monday_of(picked)
 sunday = monday + dt.timedelta(days=6)
 key = monday.isoformat()
 st.caption(f"Planning **{monday:%a %d %b} – {sunday:%a %d %b %Y}**")
+
+with c_theme:
+    names = list(THEMES)
+    saved = store.get_theme()
+    design = st.selectbox("Design", names,
+                          index=names.index(saved) if saved in names else 0)
+    if design != saved:
+        store.set_theme(design)
+THEME = Theme(**THEMES[design])
 
 with c_cal:
     st.write("")
@@ -172,9 +181,6 @@ for i, col in enumerate(cols):
 # --------------------------------------------------------------------------- #
 # Live preview / set
 # --------------------------------------------------------------------------- #
-THEME = Theme()
-
-
 def render_png() -> bytes:
     week = Week.build(monday, meetings, new_todos)
     buf = io.BytesIO()

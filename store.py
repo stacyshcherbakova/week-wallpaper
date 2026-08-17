@@ -79,6 +79,17 @@ def clear_selected_calendars() -> None:
     save_config(cfg)
 
 
+def get_theme() -> str | None:
+    """Saved design preset name (None until the user picks one)."""
+    return load_config().get("theme")
+
+
+def set_theme(name: str) -> None:
+    cfg = load_config()
+    cfg["theme"] = name
+    save_config(cfg)
+
+
 # --- plain-text <-> todos (one to-do per line; prefix "x " marks it done) ---
 def todos_to_text(todos: list[Todo]) -> str:
     return "\n".join((("x " if t.done else "") + t.text) for t in todos)

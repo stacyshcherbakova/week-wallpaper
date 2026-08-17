@@ -5,6 +5,11 @@ Plan your week — meetings synced from **Apple Calendar** plus personal
 whenever plans change. Built with Streamlit + Pillow; sets the desktop via
 AppleScript.
 
+Events are read from the macOS **Calendar** app, so any calendar it can sync
+works here too: iCloud, **Google**, **Outlook / Microsoft 365 / Exchange**,
+CalDAV, and subscribed `.ics` feeds. Everything runs locally — no API keys,
+no sign-ins, nothing leaves your Mac.
+
 Designed for a 14" MacBook Pro (3024 × 1964) and rendered at 2× that
 (**6048 × 3928**) so it stays crisp on any display — tune `Theme.scale`
 in `render.py` to go higher or lower.
@@ -81,8 +86,14 @@ signing into iCloud.
 
 ## Tweaking the design
 
-All colours, sizes and spacing live in the `Theme` dataclass in `render.py`.
-Preview changes fast without the UI:
+Four presets ship in `THEMES` in `render.py` — **Phosphor** (violet CRT),
+**Mono** (black & white minimal), **Paper** (warm light, red accent) and
+**Garden** (pastel sticker cards, inspired by [syntato.garden](https://syntato.garden)).
+Pick one from the **Design** dropdown in the app; the choice is saved in
+`data/config.json`.
+
+Beyond that, all colours, sizes and spacing live in the `Theme` dataclass in
+`render.py`. Preview changes fast without the UI:
 
 ```bash
 uv run python render.py     # writes out/wallpaper.png with sample data
