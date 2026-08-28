@@ -59,9 +59,11 @@ class Day:
 class Week:
     start: dt.date                     # the Monday
     days: list[Day]
+    backlog: list[Todo] = field(default_factory=list)   # week-independent "someday" items
 
     @classmethod
-    def build(cls, monday: dt.date, meetings_by_day=None, todos_by_day=None) -> "Week":
+    def build(cls, monday: dt.date, meetings_by_day=None, todos_by_day=None,
+              backlog=None) -> "Week":
         meetings_by_day = meetings_by_day or {}
         todos_by_day = todos_by_day or {}
         days = [
@@ -70,7 +72,7 @@ class Week:
                 todos=list(todos_by_day.get(i, [])))
             for i in range(7)
         ]
-        return cls(start=monday, days=days)
+        return cls(start=monday, days=days, backlog=list(backlog or []))
 
 
 # --------------------------------------------------------------------------- #
@@ -112,9 +114,12 @@ class Theme:
     card_pad: int = 16            # how far the card extends past the column
     card_inset: int = 26          # interior padding: content shifts in this much
 
+    backlog_label: str = "BACKLOG"  # eyebrow over the low-priority strip
+    backlog_cols: int = 1           # 1 = a single vertical list; >1 flows across columns
+
     # layout — one column per day, nothing is ever truncated
     margin_x: int = 120
-    margin_top: int = 310         # 14" panel is 100 px/cm, so this is ~3.1 cm
+    margin_top: int = 220         # clears the menu bar / notch (~75 px) with room to spare
     margin_bottom: int = 110
     header_h: int = 230
     col_gap: int = 52             # gutter between day columns (hairline mid-gap)
@@ -477,6 +482,67 @@ def draw_column(draw, th, geo, i: int, day: Day, m: dict, is_today, is_weekend):
 
 
 # --------------------------------------------------------------------------- #
+# Backlog strip — week-independent "someday" to-dos along the bottom
+# --------------------------------------------------------------------------- #
+def _backlog_layout(draw, week: Week, th: Theme, geo) -> dict | None:
+    """Wrap the backlog into columns and size the strip. None when empty.
+
+    The strip keeps the theme's base type size (it never auto-shrinks with a
+    busy week). Its vertical position is set in render_week once the columns
+    are measured: it sits directly under them.
+    """
+    if not week.backlog:
+        return None
+    m = _metrics(th, 1.0)
+    inset = th.card_inset if th.card_fills else 0
+    x0 = th.margin_x + inset
+    inner_w = geo["grid_right"] - th.margin_x - 2 * inset
+    n = max(1, min(th.backlog_cols, len(week.backlog)))
+    col_w = (inner_w - (n - 1) * th.col_gap) / n
+    body = sf(m["fs_body"])
+    per_col = -(-len(week.backlog) // n)          # ceil: fill down, then across
+    cols = []
+    for c in range(n):
+        chunk = week.backlog[c * per_col:(c + 1) * per_col]
+        cols.append([(t, wrap(draw, t.text, body, col_w - m["time_w"])) for t in chunk])
+    content_h = max(sum(len(w) for _, w in col) for col in cols) * m["line_h"]
+    label_h = th.px(30) + th.fs_collabel + th.px(22)
+    return dict(cols=cols, m=m, x0=x0, col_w=col_w, label_h=label_h,
+                h=label_h + content_h + th.px(30))
+
+
+def _draw_backlog(draw, th: Theme, geo, band, C):
+    m, y0 = band["m"], band["top"]
+    lh, tw = m["line_h"], m["time_w"]
+    body, tick = sf(m["fs_body"]), mono(m["fs_time"])
+    if th.card_fills:                         # one wide neutral card
+        draw.rounded_rectangle(
+            [th.margin_x - th.card_pad, y0, geo["grid_right"] + th.card_pad, band["bottom"]],
+            radius=th.px(26), fill=hex_rgb(th.card_fills[-1]))
+    else:                                     # hairline, like the header divider
+        draw.line([(th.margin_x, y0), (geo["grid_right"], y0)],
+                  fill=C["line"], width=th.lw(1))
+    draw_ls(draw, (band["x0"], y0 + th.px(30)), th.backlog_label, mono(th.fs_collabel),
+            C["stone"] if th.card_fills else C["stone_dim"], ls=th.px(5), anchor="la")
+    top = y0 + band["label_h"]
+    for c, col in enumerate(band["cols"]):
+        x = band["x0"] + c * (band["col_w"] + th.col_gap)
+        y = top
+        for t, lines in col:
+            head_y = y + lh / 2
+            txt = C["stone_dim"] if t.done else C["stone"]     # quieter than the week
+            for ln in lines:
+                draw.text((x + tw, y + lh / 2), ln, font=body, fill=txt, anchor="lm")
+                if t.done:
+                    w = draw.textlength(ln, font=body)
+                    draw.line([(x + tw, y + lh / 2), (x + tw + w, y + lh / 2)],
+                              fill=C["stone_dim"], width=th.lw(2))
+                y += lh
+            draw.text((x, head_y), "[×]" if t.done else "[ ]", font=tick,
+                      fill=C["accent"] if t.done else C["accent_dim"], anchor="lm")
+
+
+# --------------------------------------------------------------------------- #
 # Header + compose
 # --------------------------------------------------------------------------- #
 def _range_label(start: dt.date) -> str:
@@ -494,9 +560,16 @@ def render_week(week: Week, theme: Theme | None = None, today: dt.date | None = 
     # Measure first (textlength needs a draw, not a real canvas) so the type
     # scale and the column chrome can both follow the actual content.
     probe = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    band = _backlog_layout(probe, week, th, geo)          # None when no backlog
+    if band:                                              # reserve room under the columns
+        geo["grid_bottom"] -= band["h"] + th.px(56)
+        geo["body_h"] = geo["grid_bottom"] - geo["body_top"]
     m = _metrics(th, fit_scale(probe, week, th, geo))
     content_h = max(_day_blocks(probe, d, m, geo["text_w"])[2] for d in week.days)
     chrome_bottom = min(geo["grid_bottom"], geo["body_top"] + content_h + th.px(44))
+    if band:                                              # the strip follows the columns
+        band["top"] = chrome_bottom + th.px(56)
+        band["bottom"] = band["top"] + band["h"]
 
     # bloom sources: header, and today's column if in view
     blooms = [(int(th.width * 0.24), int(th.margin_top * 0.4), int(th.width * 0.28), 0.9)]
@@ -562,6 +635,9 @@ def render_week(week: Week, theme: Theme | None = None, today: dt.date | None = 
         draw_column(draw, th, geo, i, day, m,
                     is_today=(day.date == today), is_weekend=(i >= 5))
 
+    if band:
+        _draw_backlog(draw, th, geo, band, C)
+
     return img
 
 
@@ -590,7 +666,11 @@ def _sample_week() -> Week:
         5: [Todo("Hike"), Todo("Read big-clouds paper 2")],
         6: [Todo("Plan next week"), Todo("Meal prep")],
     }
-    return Week.build(monday, meetings, todos)
+    backlog = [Todo("Renew passport"), Todo("Sort out pension paperwork"),
+               Todo("Read Designing Data-Intensive Applications"),
+               Todo("Fix bike brakes"), Todo("Back up old laptop photos"),
+               Todo("Try the new ramen place"), Todo("Learn some Julia")]
+    return Week.build(monday, meetings, todos, backlog)
 
 
 def main():

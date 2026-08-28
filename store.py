@@ -1,6 +1,10 @@
 """Persist personal to-dos per week in data/todos.json.
 
-JSON shape:  { "<monday-iso>": { "<0-6>": [ {"text": ..., "done": ...}, ... ] } }
+JSON shape:  { "<monday-iso>": { "<0-6>": [ {"text": ..., "done": ...}, ... ] },
+               "backlog": [ {"text": ..., "done": ...}, ... ] }
+
+"backlog" is the week-independent "someday" list: it appears at the bottom of
+every wallpaper until you delete the line.
 """
 from __future__ import annotations
 
@@ -43,6 +47,24 @@ def set_week(monday: dt.date, todos_by_day: dict[int, list[Todo]]) -> None:
         data[monday.isoformat()] = packed
     else:
         data.pop(monday.isoformat(), None)
+    save_all(data)
+
+
+BACKLOG_KEY = "backlog"
+
+
+def get_backlog() -> list[Todo]:
+    """Low-priority to-dos kept on every week's wallpaper."""
+    return [Todo(**t) for t in load_all().get(BACKLOG_KEY, [])]
+
+
+def set_backlog(todos: list[Todo]) -> None:
+    data = load_all()
+    packed = [{"text": t.text, "done": t.done} for t in todos]
+    if packed:
+        data[BACKLOG_KEY] = packed
+    else:
+        data.pop(BACKLOG_KEY, None)
     save_all(data)
 
 

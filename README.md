@@ -49,7 +49,10 @@ Then:
 3. Type **to-dos** under each day, one per line. Prefix a line with `x ` to
    show it as done (struck through). To-dos save themselves per week in
    `data/todos.json`.
-4. The preview redraws as you type — hit **🖥️ Set as wallpaper** when it looks
+4. **Backlog** (under the day columns) is for low-priority to-dos that aren't
+   tied to a week — they're listed under the days on every wallpaper until
+   you delete the line.
+5. The preview redraws as you type — hit **🖥️ Set as wallpaper** when it looks
    right (or **⬇️ Download PNG**).
 
 Each render is written to `out/wallpaper-<week>-<hash>.png`. The hash matters:

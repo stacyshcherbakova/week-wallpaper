@@ -179,10 +179,22 @@ for i, col in enumerate(cols):
         new_todos[i] = store.text_to_todos(st.session_state[wkey])
 
 # --------------------------------------------------------------------------- #
+# Backlog — low-priority to-dos that aren't tied to a week. They sit under the
+# day columns on every wallpaper until you delete the line.
+# --------------------------------------------------------------------------- #
+st.markdown("**Backlog** · low-priority to-dos kept on every week's wallpaper "
+            "— delete a line once it's done")
+if "backlog" not in st.session_state:
+    st.session_state["backlog"] = store.todos_to_text(store.get_backlog())
+st.text_area("Backlog", key="backlog", height=120, label_visibility="collapsed",
+             placeholder="one per line — stays here week after week")
+backlog = store.text_to_todos(st.session_state["backlog"])
+
+# --------------------------------------------------------------------------- #
 # Live preview / set
 # --------------------------------------------------------------------------- #
 def render_png() -> bytes:
-    week = Week.build(monday, meetings, new_todos)
+    week = Week.build(monday, meetings, new_todos, backlog)
     buf = io.BytesIO()
     render_week(week, THEME, today=dt.date.today()).save(buf, format="PNG")
     return buf.getvalue()
@@ -216,6 +228,7 @@ st.divider()
 # pull is cached in session state), so the image below is always current.
 # The button's only job is pushing it to the desktop.
 store.set_week(monday, new_todos)
+store.set_backlog(backlog)
 png = render_png()
 
 b1, b2, _ = st.columns([1, 1, 2])
